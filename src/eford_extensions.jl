@@ -68,12 +68,12 @@ function em_aist!{GT,T<:FloatingPoint}(gmm::GMM{GT,GaussianMixtures.FullCov{GT}}
       # Compute distance's
       Δ = calc_distances(gmm, x)  ## Δ = (x_i - μ_k)' Λ_κ (x_i - m_k)  # nx x ng
       # Compute ownership probabilities
-      normalization = Array(RT,d)
+      normalization = Array(RT,ng)
       for k=1:ng # compute probability for point given that component
         # Σ's now are inverse choleski's, so logdet becomes -2sum(log(diag))
         if u_from_dist == :u_from_dist_gaussian
-          normalization[k] = 0.5d*log(2π) - sum(log(diag((gmm.Σ[k]))))  # WARNING: Assumes Gaussian
-          epsilon[:,k] = -0.5*Δ[:,k] .- normalization[k]            # WARNING: Assumes Gaussian
+          normalization[k] = -0.5d*log(2π) + sum(log(diag((gmm.Σ[k]))))  # WARNING: Assumes Gaussian
+          epsilon[:,k] = -0.5*Δ[:,k] .+ normalization[k]            # WARNING: Assumes Gaussian
         elseif u_from_dist == :u_from_dist_t
           normalization[k] = lgamma((nu+d)/2)-lgamma(nu/2)-0.5*d*log(pi*nu) + sum(log(diag((gmm.Σ[k]))))  # WARNING: Assumes t_nu
           epsilon[:,k] = -0.5*(nu+d)*log(1.0+Δ[:,k]) .+ normalization[k]            # WARNING: Assumes t_nu
@@ -89,10 +89,20 @@ function em_aist!{GT,T<:FloatingPoint}(gmm::GMM{GT,GaussianMixtures.FullCov{GT}}
       n_eff_in_component = sum(epsilon,1)    # ng
 
       ## E-step
-      fill!(gmm.w,0.0)
-      for n in 1:nₓ
-         gmm.w .+= vec(epsilon[n,:].*exp(-0.5*Δ[n,:].-normalization'))
-      end
+      #println("Pre: size(w)= ", size(gmm.w) )
+      gmm.w = zeros(ng)
+      #println("size(w)= ", size(gmm.w), " size(eps)= ",size(epsilon), " sizeof(dist) = ", size(Δ), " sizeof(norm)= ", size(normalization))
+        if u_from_dist == :u_from_dist_gaussian
+           gmm.w = vec(logsumexp(  log(epsilon).-0.5*Δ,1))
+           gmm.w += normalization
+        elseif u_from_dist == :u_from_dist_t
+           gmm.w = vec(logsumexp(  log(epsilon).-0.5*(nu+d)*log(1.0+Δ),1))
+           gmm.w += normalization
+        else
+          println("# Don't know what PDF to use with u function.")
+        end
+      #println("Post: size(w)= ", size(gmm.w) )
+      gmm.w = exp(gmm.w)/exp(logsumexp(gmm.w))  # Do we need this to make sure weights add up?
       ## M-step
       num = zeros(RT, ng, d); denom = zeros(RT, ng)
       for n in 1:nₓ
@@ -124,7 +134,12 @@ function em_aist!{GT,T<:FloatingPoint}(gmm::GMM{GT,GaussianMixtures.FullCov{GT}}
            end
         end
         for k in 1:ng
-          gmm.Σ[k] = GaussianMixtures.cholinv( num[k] / denom[k])                      # ng x (d x d)
+          try 
+             new_cholinv_Sigma_k = GaussianMixtures.cholinv( num[k] / denom[k])                      # ng x (d x d)
+          catch
+             warn(string("# cholinv failed, so not updating covariance matrix for comonent ",k," with weight ", gmm.w[k]))
+          end
+          gmm.Σ[k] = new_cholinv_Sigma_k
         end
       else
         error("Unknown kind")
