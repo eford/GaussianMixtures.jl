@@ -134,6 +134,7 @@ function em_aist!{GT,T<:FloatingPoint}(gmm::GMM{GT,GaussianMixtures.FullCov{GT}}
            end
         end
         for k in 1:ng
+          local new_cholinv_Sigma_k
           try 
              new_cholinv_Sigma_k = GaussianMixtures.cholinv( num[k] / denom[k])                      # ng x (d x d)
           catch
